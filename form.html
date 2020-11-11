@@ -1,0 +1,61 @@
+<html>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootswatch/4.5.2/superhero/bootstrap.min.css" integrity="sha384-HnTY+mLT0stQlOwD3wcAzSVAZbrBp141qwfR4WfTqVQKSgmcgzk+oP0ieIyrxiFO" crossorigin="anonymous">
+    <body>
+        <div class="container">
+        {{if not .ShowForm}}
+            <div class="row justify-content-center mt-5">
+                <h1>{{.Price}} to watch these movies</h1>
+                <table class="table table-hover">
+                    <tr>
+                        <th>Name</th>
+                        <th>Streaming At</th>
+                        <th>Price</th>
+                    </tr>
+                    {{range .Films}}
+                        {{$film := .FilmName}}
+                        {{range .Streaming}}
+                            {{if .ServiceName}}
+                                <tr>
+                                    <td>{{$film}}</td>
+                                    <td>{{.ServiceName}}</td>
+                                    <td>{{.Price}}</td>
+                                </tr>
+                            {{end}}
+                        {{end}}
+                        {{if .CheapestRental.ServiceName}}
+                            <tr>
+                                <td>{{$film}}</td>
+                                <td>{{.CheapestRental.ServiceName}}</td>
+                                <td>{{.CheapestRental.Price}}</td>
+                            </tr>
+                        {{end}}
+                    {{end}}
+                </table>
+            </div>
+        {{else}}
+            <div>
+                <div class="row justify-content-center mt-5">
+                    <h1>Where can I stream this director's filmography?</h1>
+                </div>
+                <div class="row justify-content-center">
+                    <form method="POST">
+                        <div class="form-group">
+                            <label>Director:</label><br />
+                            <input type="text" name="name"><br />
+                        </div>
+                        <div class="form-group">
+                            <label>Streaming Services:</label><br />
+                            <select name="streamingServices" multiple>
+                                {{range .StreamingServices}}
+                                    <option value="{{.}}">{{.}}</option>
+                                {{end}}
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Submit</button>
+                    </form>
+                </div>
+            </div>
+        {{end}}
+        </div>
+    </body>
+</html>

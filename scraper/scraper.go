@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func ScrapeDirector(name string, streamingServices []string) ([]FilmEntry, float64) {
+func ScrapeDirector(name string, streamingServices []string) ([]FilmEntry, string) {
 	url := getDirectorUrl(name)
 	filmElements := scrapeFilms(url)
 	films, overallPrice := scrapePrices(filmElements, streamingServices)
@@ -23,7 +23,7 @@ type FilmEntry struct {
 	CheapestRental PriceEntry
 }
 
-func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]FilmEntry, float64) {
+func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]FilmEntry, string) {
 	var prices []FilmPriceEntry
 	var servicesDataChan = make(chan FilmPriceEntry, len(elements))
 
@@ -40,14 +40,14 @@ func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]
 	return films, overallPrice
 }
 
-func calculateOverallPrice(films []FilmEntry) float64 {
+func calculateOverallPrice(films []FilmEntry) string {
 	var price float64
 	for _, film := range films {
 		if len(film.Streaming) == 0 {
 			price += film.CheapestRental.Price
 		}
 	}
-	return price
+	return fmt.Sprintf("$%.2f", price)
 }
 
 func getBestPrices(prices []FilmPriceEntry, streamingServices []string) []FilmEntry {
