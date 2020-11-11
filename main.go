@@ -1,15 +1,26 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
+	"github.com/gorilla/mux"
 	"letterboxd_scraper/scraper"
-	"os"
+	"net/http"
 )
 
+type Response struct {
+	Films []scraper.FilmEntry
+	Price float64
+}
+
 func main() {
-	directorName := os.Args[1]
-	data := scraper.ScrapeDirector(directorName)
-	for _, datum := range data {
-		fmt.Println(datum.Name, datum.Price)
-	}
+	router := mux.NewRouter()
+	router.HandleFunc("/director/{name}", func(w http.ResponseWriter, r *http.Request) {
+		vars := mux.Vars(r)
+		directorName := vars["name"]
+		streamingServices := []string{"Netflix", "HBO Max", "Amazon Prime Video", "TCM", "Criterion Channel"}
+		films, price := scraper.ScrapeDirector(directorName, streamingServices)
+		json.NewEncoder(w).Encode(Response{Films: films, Price: price})
+	})
+
+	http.ListenAndServe(":8080", router)
 }

@@ -5,35 +5,101 @@ import (
 	"github.com/Jeffail/gabs/v2"
 	"github.com/gocolly/colly/v2"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
-func ScrapeDirector(name string) []PriceEntry {
+func ScrapeDirector(name string, streamingServices []string) ([]FilmEntry, float64) {
 	url := getDirectorUrl(name)
-	c := colly.NewCollector()
-	var data []PriceEntry
-	var numFilms int
-
-	elements := getElements(c, numFilms, url)
-
-	data = scrapeData(elements, data)
-	return data
+	filmElements := scrapeFilms(url)
+	films, overallPrice := scrapePrices(filmElements, streamingServices)
+	return films, overallPrice
 }
 
-func scrapeData(elements []*colly.HTMLElement, data []PriceEntry) []PriceEntry {
-	var servicesDataChan = make(chan []PriceEntry, len(elements))
+type FilmEntry struct {
+	FilmName string
+	Streaming []PriceEntry
+	CheapestRental PriceEntry
+}
+
+func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]FilmEntry, float64) {
+	var prices []FilmPriceEntry
+	var servicesDataChan = make(chan FilmPriceEntry, len(elements))
+
+	// Use the worker pool pattern, see https://gobyexample.com/worker-pools
 	for _, element := range elements {
 		// scrapeFilm(c, film.Url)
 		go scrapeServices(element, servicesDataChan)
 	}
 	for i := 0; i < len(elements); i++ {
-		data = append(data, <-servicesDataChan...)
+		prices = append(prices, <-servicesDataChan)
 	}
-	return data
+	films := getBestPrices(prices, streamingServices)
+	overallPrice := calculateOverallPrice(films)
+	return films, overallPrice
 }
 
-func getElements(c *colly.Collector, numFilms int, url string) []*colly.HTMLElement {
+func calculateOverallPrice(films []FilmEntry) float64 {
+	var price float64
+	for _, film := range films {
+		if len(film.Streaming) == 0 {
+			price += film.CheapestRental.Price
+		}
+	}
+	return price
+}
+
+func getBestPrices(prices []FilmPriceEntry, streamingServices []string) []FilmEntry {
+	films := make([]FilmEntry, 0)
+	for _, price := range prices {
+		streamingSites := filterPrices(price.PriceEntries, filterStreamingServices(streamingServices))
+		rentalPrices := filterPrices(price.PriceEntries, func(price PriceEntry) bool {
+			return price.PriceType == "rent"
+		})
+		sortPrices(rentalPrices)
+		if len(streamingSites) > 0 || len(rentalPrices) > 0 {
+			cheapestRentalSite := rentalPrices[0]
+			films = append(films, FilmEntry{FilmName: price.FilmName, Streaming: streamingSites, CheapestRental: cheapestRentalSite})
+		} else {
+			films = append(films, FilmEntry{FilmName: price.FilmName})
+		}
+	}
+	return films
+}
+
+func sortPrices(prices []PriceEntry) {
+	sort.Slice(prices, func(i, j int) bool {
+		return prices[i].Price < prices[j].Price
+	})
+}
+
+func filterPrices(slice []PriceEntry, filterExpr func(entry PriceEntry) bool) []PriceEntry {
+	filteredSlice := make([]PriceEntry, 0)
+	for _, item := range slice {
+		if filterExpr(item) {
+			filteredSlice = append(filteredSlice, item)
+		}
+	}
+	return filteredSlice
+}
+
+func filterStreamingServices(streamingServices []string) func(price PriceEntry) bool {
+	return func(price PriceEntry) bool {
+		isStreaming := price.PriceType == "streaming"
+		if isStreaming {
+			for _, service := range streamingServices {
+				if price.ServiceName == service {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+func scrapeFilms(url string) []*colly.HTMLElement {
+	c := colly.NewCollector()
 	elements := make([]*colly.HTMLElement, 0)
 	c.OnHTML("li.poster-container > div", func(e *colly.HTMLElement) {
 		elements = append(elements, e)
@@ -63,16 +129,21 @@ type Film struct {
 }
 
 type PriceEntry struct {
-	Name      string
-	Format    string
-	Price     float64
-	PriceType string
-	FilmName  string
-	FilmId    string
-	Url       string
+	ServiceName string
+	Format      string
+	Price       float64
+	PriceType   string
+	FilmName    string
+	FilmId      string
+	Url         string
 }
 
-func getServicesData(jsonParsed *gabs.Container, film Film) []PriceEntry {
+type FilmPriceEntry struct {
+	FilmName string
+	PriceEntries []PriceEntry
+}
+
+func getServicesData(jsonParsed *gabs.Container, film Film) FilmPriceEntry {
 	rent := jsonParsed.Path("best.rent")
 	streaming := jsonParsed.Path("best.stream")
 	prices := make([]PriceEntry, 0)
@@ -82,7 +153,8 @@ func getServicesData(jsonParsed *gabs.Container, film Film) []PriceEntry {
 	for _, price := range getPrices(film, "rent", rent) {
 		prices = append(prices, price)
 	}
-	return prices
+	filmPriceEntry := FilmPriceEntry{FilmName: film.Name, PriceEntries: prices}
+	return filmPriceEntry
 }
 
 func getPrices(film Film, priceType string, prices *gabs.Container) []PriceEntry {
@@ -90,13 +162,13 @@ func getPrices(film Film, priceType string, prices *gabs.Container) []PriceEntry
 	for _, child := range prices.Children() {
 		price := getPrice(child)
 		priceData = append(priceData, PriceEntry{
-			Name:      child.Path("name").String(),
-			Format:    child.Path("format").String(),
-			Price:     price,
-			PriceType: priceType,
-			FilmName:  film.Name,
-			FilmId:    film.Id,
-			Url:       film.ServicesUrl,
+			ServiceName: strings.Trim(child.Path("name").String(), "\""),
+			Format:      strings.Trim(child.Path("format").String(), "\""),
+			Price:       price,
+			PriceType:   priceType,
+			FilmName:    film.Name,
+			FilmId:      film.Id,
+			Url:         film.ServicesUrl,
 		})
 	}
 	return priceData
@@ -140,20 +212,18 @@ func scrapeFilm(c *colly.Collector, url string) {
 	}
 }
 
-func scrapeServices(element *colly.HTMLElement, servicesDataChan chan []PriceEntry) {
+func scrapeServices(element *colly.HTMLElement, servicesDataChan chan FilmPriceEntry) {
 	film := getFilm(element)
 	c := colly.NewCollector()
-	var prices [] PriceEntry
 	c.OnResponse(func(e *colly.Response) {
 		jsonParsed := parseJson(e)
-		prices = getServicesData(jsonParsed, film)
-		servicesDataChan <- prices
+		filmPrices := getServicesData(jsonParsed, film)
+		servicesDataChan <- filmPrices
 	})
 	err := c.Visit(film.ServicesUrl)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("finished scraping", film.Name)
 }
 
 func getDirectorUrl(name string) string {
