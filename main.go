@@ -10,6 +10,6 @@ func main() {
 	directorName := os.Args[1]
 	data := scraper.ScrapeDirector(directorName)
 	for _, datum := range data {
-		fmt.Printf(datum.FilmName, datum.Name, datum.Price)
+		fmt.Println(datum.Name, datum.Price)
 	}
 }

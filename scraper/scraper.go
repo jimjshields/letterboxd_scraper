@@ -13,23 +13,37 @@ func ScrapeDirector(name string) []PriceEntry {
 	url := getDirectorUrl(name)
 	c := colly.NewCollector()
 	var data []PriceEntry
-	var filmChan = make(chan Film)
-	var servicesData = make([]PriceEntry, 0)
+	var numFilms int
 
-	c.OnHTML("li.poster-container > div", func(e *colly.HTMLElement) {
-		go getFilm(e, filmChan)
+	elements := getElements(c, numFilms, url)
+
+	data = scrapeData(elements, data)
+	return data
+}
+
+func scrapeData(elements []*colly.HTMLElement, data []PriceEntry) []PriceEntry {
+	var servicesDataChan = make(chan []PriceEntry, len(elements))
+	for _, element := range elements {
 		// scrapeFilm(c, film.Url)
-		servicesData = append(servicesData, scrapeServices(<-filmChan)...)
+		go scrapeServices(element, servicesDataChan)
+	}
+	for i := 0; i < len(elements); i++ {
+		data = append(data, <-servicesDataChan...)
+	}
+	return data
+}
+
+func getElements(c *colly.Collector, numFilms int, url string) []*colly.HTMLElement {
+	elements := make([]*colly.HTMLElement, 0)
+	c.OnHTML("li.poster-container > div", func(e *colly.HTMLElement) {
+		elements = append(elements, e)
 	})
 	err := c.Visit(url)
 	if err != nil {
 		fmt.Println(err)
 	}
 	c.Wait()
-	for _, priceEntry := range servicesData {
-		fmt.Println(priceEntry.FilmName, priceEntry.Name, priceEntry.Price)
-	}
-	return data
+	return elements
 }
 
 func parseJson(e *colly.Response) *gabs.Container {
@@ -105,7 +119,7 @@ func getPrice(child *gabs.Container) float64 {
 	return price
 }
 
-func getFilm(element *colly.HTMLElement, filmChan chan Film) {
+func getFilm(element *colly.HTMLElement) Film {
 	film := Film{
 		Slug:        element.Attr("data-target-link"),
 		Url:         fmt.Sprintf("https://letterboxd.com/film%s", element.Attr("data-target-link")),
@@ -113,7 +127,7 @@ func getFilm(element *colly.HTMLElement, filmChan chan Film) {
 		ServicesUrl: fmt.Sprintf("https://letterboxd.com/s/film-availability?filmId=%s&locale=USA", element.Attr("data-film-id")),
 		Name:        element.Attr("data-film-name"),
 	}
-	filmChan <- film
+	return film
 }
 
 func scrapeFilm(c *colly.Collector, url string) {
@@ -126,18 +140,20 @@ func scrapeFilm(c *colly.Collector, url string) {
 	}
 }
 
-func scrapeServices(film Film) []PriceEntry {
+func scrapeServices(element *colly.HTMLElement, servicesDataChan chan []PriceEntry) {
+	film := getFilm(element)
 	c := colly.NewCollector()
-	prices := make([]PriceEntry, 0)
+	var prices [] PriceEntry
 	c.OnResponse(func(e *colly.Response) {
 		jsonParsed := parseJson(e)
 		prices = getServicesData(jsonParsed, film)
+		servicesDataChan <- prices
 	})
 	err := c.Visit(film.ServicesUrl)
 	if err != nil {
 		panic(err)
 	}
-	return prices
+	fmt.Println("finished scraping", film.Name)
 }
 
 func getDirectorUrl(name string) string {
