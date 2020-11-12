@@ -4,7 +4,9 @@ import (
 	"github.com/gorilla/mux"
 	"html/template"
 	"letterboxd_scraper/scraper"
+	"log"
 	"net/http"
+	"os"
 )
 
 type Response struct {
@@ -36,5 +38,9 @@ func main() {
 		tmpl.Execute(w, Response{Films: films, Price: price, ShowForm: false})
 	})
 
-	http.ListenAndServe(":8080", router)
+	port := os.Getenv("PORT") // Heroku provides the port to bind to
+	if port == "" {
+		port = "8080"
+	}
+	log.Fatal(http.ListenAndServe(":"+port, router))
 }
