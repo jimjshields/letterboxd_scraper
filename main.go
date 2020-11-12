@@ -10,7 +10,7 @@ import (
 )
 
 type Response struct {
-	Films []scraper.FilmEntry
+	Films []scraper.FilmPrices
 	Price string
 	ShowForm bool
 }

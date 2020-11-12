@@ -10,22 +10,44 @@ import (
 	"strings"
 )
 
-func ScrapeDirector(name string, streamingServices []string) ([]FilmEntry, string) {
+func ScrapeDirector(name string, streamingServices []string) ([]FilmPrices, string) {
 	url := getDirectorUrl(name)
 	filmElements := scrapeFilms(url)
 	films, overallPrice := scrapePrices(filmElements, streamingServices)
 	return films, overallPrice
 }
 
-type FilmEntry struct {
-	FilmName string
+type Film struct {
+	Slug        string
+	Url         string
+	Id          string
+	ServicesUrl string
+	Name        string
+	Year        int
+}
+
+type PriceEntry struct {
+	ServiceName string
+	Format      string
+	Price       float64
+	PriceType   string
+	FilmName    string
+	FilmId      string
+	Url         string
+	Year        int
+}
+
+type FilmPrices struct {
+	FilmName     string
+	PriceEntries []PriceEntry
+	FilmDetails Film
 	Streaming []PriceEntry
 	CheapestRental PriceEntry
 }
 
-func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]FilmEntry, string) {
-	var prices []FilmPriceEntry
-	var servicesDataChan = make(chan FilmPriceEntry, len(elements))
+func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]FilmPrices, string) {
+	var films []FilmPrices
+	var servicesDataChan = make(chan FilmPrices, len(elements))
 
 	// Use the worker pool pattern, see https://gobyexample.com/worker-pools
 	for _, element := range elements {
@@ -33,14 +55,15 @@ func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]
 		go scrapeServices(element, servicesDataChan)
 	}
 	for i := 0; i < len(elements); i++ {
-		prices = append(prices, <-servicesDataChan)
+		film := <-servicesDataChan
+		film = film.getBestPrices(streamingServices)
+		films = append(films, film)
 	}
-	films := getBestPrices(prices, streamingServices)
 	overallPrice := calculateOverallPrice(films)
 	return films, overallPrice
 }
 
-func calculateOverallPrice(films []FilmEntry) string {
+func calculateOverallPrice(films []FilmPrices) string {
 	var price float64
 	for _, film := range films {
 		if len(film.Streaming) == 0 {
@@ -50,29 +73,29 @@ func calculateOverallPrice(films []FilmEntry) string {
 	return fmt.Sprintf("$%.2f", price)
 }
 
-func getBestPrices(prices []FilmPriceEntry, streamingServices []string) []FilmEntry {
-	films := make([]FilmEntry, 0)
-	for _, price := range prices {
-		streamingSites := filterPrices(price.PriceEntries, filterStreamingServices(streamingServices))
-		rentalPrices := filterPrices(price.PriceEntries, func(price PriceEntry) bool {
-			return price.PriceType == "rent"
-		})
-		sortPrices(rentalPrices)
-		if len(streamingSites) > 0 {
-			films = append(films, FilmEntry{FilmName: price.FilmName, Streaming: streamingSites})
-		} else if len(rentalPrices) > 0 {
-			cheapestRentalSite := rentalPrices[0]
-			films = append(films, FilmEntry{FilmName: price.FilmName, CheapestRental: cheapestRentalSite})
-		} else {
-			films = append(films, FilmEntry{FilmName: price.FilmName})
-		}
+func (film FilmPrices) getBestPrices(streamingServices []string) FilmPrices {
+	streamingSites := filterPrices(film.PriceEntries, filterStreamingServices(streamingServices))
+	rentalPrices := filterPrices(film.PriceEntries, func(price PriceEntry) bool {
+		return price.PriceType == "rent"
+	})
+	sortPrices(rentalPrices)
+	if len(streamingSites) > 0 {
+		film.Streaming = streamingSites
+	} else if len(rentalPrices) > 0 {
+		film.CheapestRental = rentalPrices[0]
 	}
-	return films
+	return film
 }
 
 func sortPrices(prices []PriceEntry) {
 	sort.Slice(prices, func(i, j int) bool {
 		return prices[i].Price < prices[j].Price
+	})
+}
+
+func sortFilms(films []FilmPrices) {
+	sort.Slice(films, func(i, j int) bool {
+		return films[i].FilmDetails.Year < films[j].FilmDetails.Year
 	})
 }
 
@@ -122,30 +145,7 @@ func parseJson(e *colly.Response) *gabs.Container {
 	return jsonParsed
 }
 
-type Film struct {
-	Slug        string
-	Url         string
-	Id          string
-	ServicesUrl string
-	Name        string
-}
-
-type PriceEntry struct {
-	ServiceName string
-	Format      string
-	Price       float64
-	PriceType   string
-	FilmName    string
-	FilmId      string
-	Url         string
-}
-
-type FilmPriceEntry struct {
-	FilmName string
-	PriceEntries []PriceEntry
-}
-
-func getServicesData(jsonParsed *gabs.Container, film Film) FilmPriceEntry {
+func getServicesData(jsonParsed *gabs.Container, film Film) FilmPrices {
 	rent := jsonParsed.Path("best.rent")
 	streaming := jsonParsed.Path("best.stream")
 	prices := make([]PriceEntry, 0)
@@ -155,7 +155,7 @@ func getServicesData(jsonParsed *gabs.Container, film Film) FilmPriceEntry {
 	for _, price := range getPrices(film, "rent", rent) {
 		prices = append(prices, price)
 	}
-	filmPriceEntry := FilmPriceEntry{FilmName: film.Name, PriceEntries: prices}
+	filmPriceEntry := FilmPrices{FilmName: film.Name, PriceEntries: prices}
 	return filmPriceEntry
 }
 
@@ -171,6 +171,7 @@ func getPrices(film Film, priceType string, prices *gabs.Container) []PriceEntry
 			FilmName:    film.Name,
 			FilmId:      film.Id,
 			Url:         film.ServicesUrl,
+			Year:        film.Year,
 		})
 	}
 	return priceData
@@ -194,12 +195,22 @@ func getPrice(child *gabs.Container) float64 {
 }
 
 func getFilm(element *colly.HTMLElement) Film {
+	yearString := element.Attr("data-film-release-year")
+	var year int
+	var err error
+	if yearString != "" {
+		year, err = strconv.Atoi(yearString)
+	}
+	if err != nil {
+		fmt.Println(err)
+	}
 	film := Film{
 		Slug:        element.Attr("data-target-link"),
 		Url:         fmt.Sprintf("https://letterboxd.com/film%s", element.Attr("data-target-link")),
 		Id:          element.Attr("data-film-id"),
 		ServicesUrl: fmt.Sprintf("https://letterboxd.com/s/film-availability?filmId=%s&locale=USA", element.Attr("data-film-id")),
 		Name:        element.Attr("data-film-name"),
+		Year:        year,
 	}
 	return film
 }
@@ -214,7 +225,7 @@ func scrapeFilm(c *colly.Collector, url string) {
 	}
 }
 
-func scrapeServices(element *colly.HTMLElement, servicesDataChan chan FilmPriceEntry) {
+func scrapeServices(element *colly.HTMLElement, servicesDataChan chan FilmPrices) {
 	film := getFilm(element)
 	c := colly.NewCollector()
 	c.OnResponse(func(e *colly.Response) {
