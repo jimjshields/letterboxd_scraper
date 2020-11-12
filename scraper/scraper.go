@@ -58,9 +58,11 @@ func getBestPrices(prices []FilmPriceEntry, streamingServices []string) []FilmEn
 			return price.PriceType == "rent"
 		})
 		sortPrices(rentalPrices)
-		if len(streamingSites) > 0 || len(rentalPrices) > 0 {
+		if len(streamingSites) > 0 {
+			films = append(films, FilmEntry{FilmName: price.FilmName, Streaming: streamingSites})
+		} else if len(rentalPrices) > 0 {
 			cheapestRentalSite := rentalPrices[0]
-			films = append(films, FilmEntry{FilmName: price.FilmName, Streaming: streamingSites, CheapestRental: cheapestRentalSite})
+			films = append(films, FilmEntry{FilmName: price.FilmName, CheapestRental: cheapestRentalSite})
 		} else {
 			films = append(films, FilmEntry{FilmName: price.FilmName})
 		}
