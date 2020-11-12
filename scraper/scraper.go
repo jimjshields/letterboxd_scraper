@@ -59,6 +59,15 @@ func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]
 		film = film.getBestPrices(streamingServices)
 		films = append(films, film)
 	}
+	fmt.Println("Before sorting")
+	for _, film := range films {
+		fmt.Println(film.FilmDetails.Name, film.FilmDetails.Year)
+	}
+	sortFilmsByYear(films)
+	fmt.Println("After sorting")
+	for _, film := range films {
+		fmt.Println(film.FilmDetails.Name, film.FilmDetails.Year)
+	}
 	overallPrice := calculateOverallPrice(films)
 	return films, overallPrice
 }
@@ -93,7 +102,7 @@ func sortPrices(prices []PriceEntry) {
 	})
 }
 
-func sortFilms(films []FilmPrices) {
+func sortFilmsByYear(films []FilmPrices) {
 	sort.Slice(films, func(i, j int) bool {
 		return films[i].FilmDetails.Year < films[j].FilmDetails.Year
 	})
@@ -155,7 +164,7 @@ func getServicesData(jsonParsed *gabs.Container, film Film) FilmPrices {
 	for _, price := range getPrices(film, "rent", rent) {
 		prices = append(prices, price)
 	}
-	filmPriceEntry := FilmPrices{FilmName: film.Name, PriceEntries: prices}
+	filmPriceEntry := FilmPrices{FilmName: film.Name, PriceEntries: prices, FilmDetails: film}
 	return filmPriceEntry
 }
 
