@@ -1,20 +1,38 @@
 package scraper
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/Jeffail/gabs/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/gocolly/colly/v2"
+	"letterboxd_scraper/cache"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
-func ScrapeDirector(name string, streamingServices []string) ([]FilmPrices, string) {
+const DirectorsKey string = "directors"
+
+func ScrapeDirector(ctx context.Context, name string, streamingServices []string) ([]FilmPrices, PriceDetails) {
 	url := getDirectorUrl(name)
 	filmElements := scrapeFilms(url)
-	films, overallPrice := scrapePrices(filmElements, streamingServices)
-	return films, overallPrice
+	films, priceDetails := scrapePrices(ctx, filmElements, streamingServices)
+
+	// Assume that if there are films, it's a real director we can save for later
+	if len(films) > 0 {
+		cacheDirector(ctx, name)
+	}
+	return films, priceDetails
+}
+
+func cacheDirector(ctx context.Context, name string) {
+	client := cache.RedisClient()
+	client.SAdd(ctx, DirectorsKey, strings.Title(name))
+	defer client.Close()
 }
 
 type Film struct {
@@ -38,48 +56,54 @@ type PriceEntry struct {
 }
 
 type FilmPrices struct {
-	FilmName     string
-	PriceEntries []PriceEntry
-	FilmDetails Film
-	Streaming []PriceEntry
+	FilmName       string
+	PriceEntries   []PriceEntry
+	FilmDetails    Film
+	Streaming      []PriceEntry
 	CheapestRental PriceEntry
 }
 
-func scrapePrices(elements []*colly.HTMLElement, streamingServices []string) ([]FilmPrices, string) {
+type PriceDetails struct {
+	NumFilms     int
+	OverallPrice string
+	PricePerFilm string
+}
+
+func scrapePrices(ctx context.Context, elements []*colly.HTMLElement, streamingServices []string) ([]FilmPrices, PriceDetails) {
 	var films []FilmPrices
 	var servicesDataChan = make(chan FilmPrices, len(elements))
 
 	// Use the worker pool pattern, see https://gobyexample.com/worker-pools
 	for _, element := range elements {
 		// scrapeFilm(c, film.Url)
-		go scrapeServices(element, servicesDataChan)
+		go scrapeServices(ctx, element, servicesDataChan)
 	}
 	for i := 0; i < len(elements); i++ {
 		film := <-servicesDataChan
 		film = film.getBestPrices(streamingServices)
 		films = append(films, film)
 	}
-	fmt.Println("Before sorting")
-	for _, film := range films {
-		fmt.Println(film.FilmDetails.Name, film.FilmDetails.Year)
-	}
 	sortFilmsByYear(films)
-	fmt.Println("After sorting")
-	for _, film := range films {
-		fmt.Println(film.FilmDetails.Name, film.FilmDetails.Year)
-	}
-	overallPrice := calculateOverallPrice(films)
-	return films, overallPrice
+	priceDetails := calculateTotals(films)
+	return films, priceDetails
 }
 
-func calculateOverallPrice(films []FilmPrices) string {
+func calculateTotals(films []FilmPrices) PriceDetails {
 	var price float64
+	var numFilms int
 	for _, film := range films {
 		if len(film.Streaming) == 0 {
 			price += film.CheapestRental.Price
 		}
+		if len(film.Streaming) > 0 || film.CheapestRental.ServiceName != "" {
+			numFilms += 1
+		}
 	}
-	return fmt.Sprintf("$%.2f", price)
+	return PriceDetails{
+		NumFilms:     numFilms,
+		OverallPrice: fmt.Sprintf("$%.2f", price),
+		PricePerFilm: fmt.Sprintf("$%.2f", price/float64(numFilms)),
+	}
 }
 
 func (film FilmPrices) getBestPrices(streamingServices []string) FilmPrices {
@@ -171,7 +195,7 @@ func getServicesData(jsonParsed *gabs.Container, film Film) FilmPrices {
 func getPrices(film Film, priceType string, prices *gabs.Container) []PriceEntry {
 	priceData := make([]PriceEntry, 0)
 	for _, child := range prices.Children() {
-		price := getPrice(child)
+		price := getPrice(child.Path("price").String())
 		priceData = append(priceData, PriceEntry{
 			ServiceName: strings.Trim(child.Path("name").String(), "\""),
 			Format:      strings.Trim(child.Path("format").String(), "\""),
@@ -188,11 +212,10 @@ func getPrices(film Film, priceType string, prices *gabs.Container) []PriceEntry
 
 var priceRegex = regexp.MustCompile(`\d+\.\d+`)
 
-func getPrice(child *gabs.Container) float64 {
-	priceString := child.Path("price").String()
+func getPrice(priceString string) float64 {
 	var price float64
 	var err error
-	if !strings.Contains(priceString, "null") {
+	if !strings.Contains(priceString, "null") && priceString != "" && priceString != "0" {
 		price, err = strconv.ParseFloat(string(priceRegex.Find([]byte(priceString))), 64)
 		if err != nil {
 			panic(err)
@@ -205,14 +228,7 @@ func getPrice(child *gabs.Container) float64 {
 
 func getFilm(element *colly.HTMLElement) Film {
 	yearString := element.Attr("data-film-release-year")
-	var year int
-	var err error
-	if yearString != "" {
-		year, err = strconv.Atoi(yearString)
-	}
-	if err != nil {
-		fmt.Println(err)
-	}
+	year := getYear(yearString)
 	film := Film{
 		Slug:        element.Attr("data-target-link"),
 		Url:         fmt.Sprintf("https://letterboxd.com/film%s", element.Attr("data-target-link")),
@@ -224,9 +240,21 @@ func getFilm(element *colly.HTMLElement) Film {
 	return film
 }
 
+func getYear(yearString string) int {
+	var year int
+	var err error
+	if yearString != "" {
+		year, err = strconv.Atoi(yearString)
+	}
+	if err != nil {
+		panic(err)
+	}
+	return year
+}
+
 func scrapeFilm(c *colly.Collector, url string) {
 	c.OnHTML("section", func(e *colly.HTMLElement) {
-		fmt.Println(e)
+		panic(e)
 	})
 	err := c.Visit(url)
 	if err != nil {
@@ -234,18 +262,101 @@ func scrapeFilm(c *colly.Collector, url string) {
 	}
 }
 
-func scrapeServices(element *colly.HTMLElement, servicesDataChan chan FilmPrices) {
+func scrapeServices(ctx context.Context, element *colly.HTMLElement, servicesDataChan chan FilmPrices) {
 	film := getFilm(element)
-	c := colly.NewCollector()
-	c.OnResponse(func(e *colly.Response) {
-		jsonParsed := parseJson(e)
-		filmPrices := getServicesData(jsonParsed, film)
+	filmPrices, ok := tryGetCachedFilm(ctx, film)
+	if ok {
 		servicesDataChan <- filmPrices
-	})
-	err := c.Visit(film.ServicesUrl)
+	} else {
+		c := colly.NewCollector()
+		c.OnResponse(func(e *colly.Response) {
+			jsonParsed := parseJson(e)
+			filmPrices := getServicesData(jsonParsed, film)
+			cacheFilm(ctx, filmPrices)
+			servicesDataChan <- filmPrices
+		})
+		err := c.Visit(film.ServicesUrl)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func cacheFilm(ctx context.Context, filmPrices FilmPrices) {
+	redisClient := cache.RedisClient()
+	defer redisClient.Close()
+	toCache := serialize(filmPrices)
+	_, err := redisClient.Set(ctx, filmPrices.FilmDetails.Id, toCache, time.Duration(24)*time.Hour).Result()
+	if err != redis.Nil && err != nil {
+		panic(err)
+	}
+}
+
+func tryGetCachedFilm(ctx context.Context, film Film) (FilmPrices, bool) {
+	var filmPrices FilmPrices
+	var ok bool
+	redisClient := cache.RedisClient()
+	defer redisClient.Close()
+	cachedFilm, err := redisClient.Get(ctx, film.Id).Result()
+	if err != redis.Nil && err != nil {
+		panic(err)
+	}
+	if cachedFilm != "" {
+		filmPrices = deserialize(cachedFilm)
+		ok = true
+	}
+	return filmPrices, ok
+}
+
+func deserialize(cachedFilm string) FilmPrices {
+	parsedJson, err := gabs.ParseJSON([]byte(cachedFilm))
 	if err != nil {
 		panic(err)
 	}
+	priceEntries := make([]PriceEntry, 0)
+	prices := parsedJson.Path("PriceEntries")
+	for _, price := range prices.Children() {
+		priceEntries = append(priceEntries, PriceEntry{
+			ServiceName: getUnquotedString(price.Path("ServiceName").String()),
+			Format:      getUnquotedString(price.Path("Format").String()),
+			Price:       getPrice(price.Path("Price").String()),
+			PriceType:   getUnquotedString(price.Path("PriceType").String()),
+			FilmName:    getUnquotedString(price.Path("FilmName").String()),
+			FilmId:      getUnquotedString(price.Path("FilmId").String()),
+			Url:         getUnquotedString(price.Path("Url").String()),
+			Year:        getYear(price.Path("Year").String()),
+		})
+	}
+	filmDetails := parsedJson.Path("FilmDetails")
+	filmPrices := FilmPrices{
+		FilmName: getUnquotedString(parsedJson.Path("FilmName").String()),
+		FilmDetails: Film{
+			Slug:        getUnquotedString(filmDetails.Path("Slug").String()),
+			Url:         getUnquotedString(filmDetails.Path("Url").String()),
+			Id:          getUnquotedString(filmDetails.Path("Id").String()),
+			ServicesUrl: getUnquotedString(filmDetails.Path("ServicesUrl").String()),
+			Name:        getUnquotedString(filmDetails.Path("Name").String()),
+			Year:        getYear(filmDetails.Path("Year").String()),
+		},
+		PriceEntries: priceEntries,
+	}
+	return filmPrices
+}
+
+func getUnquotedString(myString string) string {
+	priceType, err := strconv.Unquote(myString)
+	if err != nil {
+		panic(err)
+	}
+	return priceType
+}
+
+func serialize(filmPrices FilmPrices) []byte {
+	res, err := json.Marshal(filmPrices)
+	if err != nil {
+		panic(err)
+	}
+	return res
 }
 
 func getDirectorUrl(name string) string {

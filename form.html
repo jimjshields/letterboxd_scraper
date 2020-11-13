@@ -1,13 +1,14 @@
 <html>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootswatch/4.5.2/superhero/bootstrap.min.css" integrity="sha384-HnTY+mLT0stQlOwD3wcAzSVAZbrBp141qwfR4WfTqVQKSgmcgzk+oP0ieIyrxiFO" crossorigin="anonymous">
+    <link rel="stylesheet" href="/static/css/all.css">
     <body>
         <div class="container">
         {{if not .ShowForm}}
             <div class="row justify-content-center mt-5">
-                <h1>{{.Price}} to watch these movies</h1>
+                <h1>{{.PriceDetails.OverallPrice}} to watch the {{.PriceDetails.NumFilms}} movies of {{.DirectorName}} ({{.PriceDetails.PricePerFilm}} per movie!)</h1>
                 <table class="table table-hover">
                     <tr>
-                        <th>Name</th>
+                        <th>Movie</th>
                         <th>Year</th>
                         <th>Streaming At</th>
                         <th>Price</th>
@@ -20,7 +21,7 @@
                                     <td>{{$film}}</td>
                                     <td>{{.Year}}</td>
                                     <td>{{.ServiceName}}</td>
-                                    <td>{{.Price}}</td>
+                                    <td>${{.Price}}</td>
                                 </tr>
                             {{end}}
                         {{end}}
@@ -29,7 +30,7 @@
                                 <td>{{$film}}</td>
                                 <td>{{.CheapestRental.Year}}</td>
                                 <td>{{.CheapestRental.ServiceName}}</td>
-                                <td>{{.CheapestRental.Price}}</td>
+                                <td>${{.CheapestRental.Price}}</td>
                             </tr>
                         {{end}}
                     {{end}}
@@ -40,22 +41,33 @@
                 <div class="row justify-content-center mt-5">
                     <h1>Where can I stream this director's filmography?</h1>
                 </div>
-                <div class="row justify-content-center">
+                <div class="justify-content-center">
                     <form method="POST">
+                        <div class="col-auto">
                         <div class="form-group">
-                            <label>Director:</label><br />
-                            <input type="text" name="name"><br />
+                            <label class="col-form-label-lg">Director:</label><br />
+                            <input type="text" name="directorName" class="form-control form-control-lg"><br />
                         </div>
                         <div class="form-group">
-                            <label>Streaming Services:</label><br />
-                            <select name="streamingServices" multiple>
+                            <label class="col-form-label-lg">Or Pick One:</label><br />
+                            <select name="directorNameSelect" class="form-control form-control-lg" multiple>
+                                {{range .Directors}}
+                                    <option value="{{.}}">{{.}}</option>
+                                {{end}}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="col-form-label-lg">Streaming Services:</label><br />
+                            <select name="streamingServices" class="form-control form-control-lg" multiple>
                                 {{range .StreamingServices}}
                                     <option value="{{.}}">{{.}}</option>
                                 {{end}}
                             </select>
                         </div>
-                        <button type="submit" class="btn btn-primary">Submit</button>
+                        <button type="submit" class="btn btn-primary btn-lg">Submit</button>
+                        </div>
                     </form>
+                    </div>
                 </div>
             </div>
         {{end}}
